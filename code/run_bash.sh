@@ -1,0 +1,1 @@
+python SImpleMRs.py --dataset baby --tau1 0.1 --tau2 0.1 --lambda_1 0.15 --gamma 0.011 --alpha 1e-5 --decay 1e-7
