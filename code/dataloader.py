@@ -42,11 +42,15 @@ class Loader(Dataset):
         train_df = df[df['x_label'] == 0]
         valid_df = df[df['x_label'] == 1]
         test_df  = df[df['x_label'] == 2]
-        # train_df = train_df[train_df['rating'] > 3]
+        # train_df = train_df[train_df['rating'] > 1]
         # valid_df = valid_df[valid_df['rating'] > 1]
         train_users = set(train_df['user_id'].values)
         valid_df = valid_df[valid_df['user_id'].isin(train_users)]
         test_df = test_df[test_df['user_id'].isin(train_users)]
+        test_ratings = test_df['rating']
+        # test_df = test_df[test_ratings > 2]
+        # valid_users = user_item_counts[user_item_counts >= 3].index
+        # test_df = test_df[test_df['user_id'].isin(valid_users)]
         train_edge_index = torch.LongTensor(np.array(train_df[['user_id', 'item_id']]).T)
         valid_edge_index = torch.LongTensor(np.array(valid_df[['user_id', 'item_id']]).T)
         test_edge_index = torch.LongTensor(np.array(test_df[['user_id', 'item_id']]).T)

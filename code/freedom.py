@@ -168,8 +168,9 @@ class FREEDOM(RecModel):
         regularization = self.config['decay'] * (1/2) * embedding.norm(p=2).pow(2)
         regularization = regularization / edge_label_index.size(1)
         return regularization
-    
-    def forward(self,edge_label_index:Tensor):
+    def forward(self):
+        return self.get_embedding()
+    def get_loss(self,edge_label_index:Tensor):
         text_feats = self.text_trs(self.text_embedding.weight)
         image_feats = self.image_trs(self.image_embedding.weight)     
         ua_embeddings, ia_embeddings = self.get_embedding()
@@ -214,7 +215,7 @@ def train(datset,model:FREEDOM,opt):
     total_batch = len(S)
     for edge_label_index in S:
         opt.zero_grad()
-        loss = model(edge_label_index)
+        loss = model.get_loss(edge_label_index)
         loss.backward()
         opt.step()   
         aver_loss += (loss)
@@ -240,6 +241,7 @@ best = 0.
 patience = 0.
 max_score = 0.
 best_result = {}
+best_model = None
 for epoch in range(1, 1001):
     start_time = time.time()
     loss = train(dataset,model=model,opt=opt)
@@ -255,12 +257,14 @@ for epoch in range(1, 1001):
             'recall@20': recall[20],
             'ndcg@20': ndcg[20]
         }
+        best_model = model
     flag,best,patience = utils.early_stopping(recall_val[20],ndcg_val[20],best,patience,model)
     if flag == 1:
         break
     print(f'Epoch: {epoch:03d}, {loss}, Time: {end_time - start_time:.2f}s')
     print(f'Valid - R@10: {recall_val[10]:.4f}, N@10: {ndcg_val[10]:.4f}, R@20: {recall_val[20]:.4f}, N@20: {ndcg_val[20]:.4f}')
     print(f'Test  - R@10: {recall[10]:.4f}, N@10: {ndcg[10]:.4f}, R@20: {recall[20]:.4f}, N@20: {ndcg[20]:.4f}')
+torch.save(best_model.state_dict(),f'../checkpoints/{world.config["dataset"]}_FREEDOM.pth')
 print("\n========== Best ==========")
 print(f'Test - R@10: {best_result["recall@10"]:.4f}, N@10: {best_result["ndcg@10"]:.4f}, '
       f'R@20: {best_result["recall@20"]:.4f}, N@20: {best_result["ndcg@20"]:.4f}')

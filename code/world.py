@@ -6,10 +6,20 @@ args = parse_args()
 config = {}
 config['bpr_batch_size'] = args.bpr_batch
 
-config['latent_dim_rec'] = args.recdim
 
-config['K'] = args.K
+K = args.K
 
+init = args.init
+
+init_weight = args.init_weight
+
+ii_k = args.ii_k
+
+neg_sampling = args.neg_sampling    
+
+zero_layer = args.zero_layer
+
+s_weight = args.s_weight
 config['test_u_batch_size'] = args.testbatch
 
 config['epochs'] = args.epochs
@@ -38,6 +48,7 @@ tau2 = args.tau2
 decay = args.decay
 lambda_1 = args.lambda_1
 decay = args.decay
+dim = args.dim
 flag = 0
 seed = args.seed
 def cprint(words: str):

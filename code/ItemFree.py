@@ -10,6 +10,7 @@ import world
 from procedure import train_bpr,test
 import utils
 import time
+import math
 from world import cprint
 from torch_sparse import SparseTensor,matmul
 from utils import init_logger, print_log
@@ -78,6 +79,67 @@ if world.config['dataset'] == 'clothing':
     }
 
 log_path = init_logger(model_name='MR', dataset_name=world.config['dataset'])
+
+class MLP(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dims=[128, 64], dropout=0.1, activation='relu'):
+        super().__init__()
+        layers = []
+        last_dim = in_dim
+
+        if activation == 'relu':
+            act = nn.ReLU()
+        elif activation == 'gelu':
+            act = nn.GELU()
+        elif activation == 'leakyrelu':
+            act = nn.LeakyReLU(0.2)
+        else:
+            raise ValueError(f"Unsupported activation: {activation}")
+
+        for h_dim in hidden_dims:
+            layers += [
+                nn.Linear(last_dim, h_dim),
+                nn.BatchNorm1d(h_dim),   # 可选：去掉则更简单
+                act,
+                nn.Dropout(dropout)
+            ]
+            last_dim = h_dim
+
+        layers.append(nn.Linear(last_dim, out_dim))
+
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.mlp(x)
+    
+class PositionalEncoding(nn.Module):
+    def __init__(self, pos_dim, max_len, device):
+        """
+        初始化位置编码。
+        :param d_model: 嵌入的维度
+        :param max_len: 最大序列长度
+        """
+        super(PositionalEncoding, self).__init__()
+        self.pos_dim = pos_dim
+        self.max_len = max_len
+        self.device = device
+        self.pe = torch.zeros(max_len, pos_dim, device=self.device)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, pos_dim, 2).float() * (-math.log(10000.0) / pos_dim))
+
+        self.pe[:, 0::2] = torch.sin(position * div_term)  # 偶数维度
+        self.pe[:, 1::2] = torch.cos(position * div_term)  # 奇数维度
+        # self.pe = nn.Parameter(torch.zeros(max_len, pos_dim, device=self.device))
+        # nn.init.xavier_uniform_(self.pe)
+
+
+    def forward(self, x):
+        """
+        将位置编码添加到输入嵌入中。
+        :param x: 输入嵌入，形状为 (seq_len, d_model)
+        :return: 添加位置编码后的嵌入
+        """
+        x = x + self.pe
+        return x
 class FREEDOM(RecModel):
     def __init__(self,
                  num_users:int,
@@ -93,38 +155,49 @@ class FREEDOM(RecModel):
             config=config,
             edge_index=edge_index
         )
+        self.i_pe = PositionalEncoding(self.config['dim'], max_len=num_items, device=world.device)
+        self.u_pe = PositionalEncoding(self.config['dim'], max_len=num_users, device=world.device)
         self.user_emb = nn.Embedding(num_embeddings=num_users,
                                      embedding_dim=config['dim'])
-        self.item_emb = nn.Embedding(num_embeddings=num_items,
-                                     embedding_dim=config['dim'])
+        # self.item_emb = nn.Embedding(num_embeddings=num_items,
+        #                              embedding_dim=config['dim'])
 
         self.device = world.device
         self.K = config['K']
-        self.val = value
-        edge_index = self.get_sparse_graph(edge_index=edge_index,use_value=False,value=self.val)
-        self.edge_index = gcn_norm(edge_index)
+        # self.val = value
+        # self.G = self.to_sparse(edge_index=edge_index,transpose=False)
+        # edge_index = self.get_sparse_graph(edge_index=edge_index,use_value=False,value=self.val)
+        # self.edge_index = gcn_norm(edge_index)
         self.v_feat = v_feat
         self.t_feat = t_feat
         self.image_embedding = nn.Embedding.from_pretrained(self.v_feat, freeze=False)
-        self.image_trs = nn.Linear(self.v_feat.shape[1], self.config['dim'],device=self.device)
+        # self.image_trs = nn.Linear(self.v_feat.shape[1], self.config['dim'],device=self.device)
         self.text_embedding = nn.Embedding.from_pretrained(self.t_feat, freeze=False)
-        self.text_trs = nn.Linear(self.t_feat.shape[1], self.config['dim'],device=self.device)
-        self.image_perf   = nn.Linear(self.v_feat.shape[1], self.config['dim'],device=self.device)
-        self.text_perf    = nn.Linear(self.t_feat.shape[1], self.config['dim'],device=self.device)
-        self.config = config
-        image_knn_sim,self.image_knn_idx = self.get_knn_ind(self.image_embedding.weight.detach())
-        text_knn_sim,self.text_knn_idx = self.get_knn_ind(self.text_embedding.weight.detach())
-        ii_graph = self.build_ppr_graph(train_edge_index, num_users , num_items, alpha=0.15, iters=20, topk=5,sparse=True)
-        self.image_knn_sim = self.get_knn_sim(self.image_embedding.weight.detach()).cuda()
-        self.text_knn_sim = self.get_knn_sim(self.text_embedding.weight.detach()).cuda()
-        img_adj = self.build_knn_adj(self.image_knn_idx)
-        txt_adj = self.build_knn_adj(self.text_knn_idx)
-        img_adj_w = self.scale_sparse(img_adj, 0.1)
-        txt_adj_w = self.scale_sparse(txt_adj, 0.9)
+        # self.text_trs = nn.Linear(self.t_feat.shape[1], self.config['dim'],device=self.device)
+        # self.image_perf   = nn.Linear(self.v_feat.shape[1], self.config['dim'],device=self.device)
+        # self.text_perf    = nn.Linear(self.t_feat.shape[1], self.config['dim'],device=self.device)
+        self.image_mlp = MLP(in_dim=self.v_feat.shape[1], 
+                             out_dim=self.config['dim'], 
+                             hidden_dims=[256, 128], dropout=0.1, 
+                             activation='relu')
+        self.text_mlp = MLP(in_dim=self.t_feat.shape[1], 
+                            out_dim=self.config['dim'], 
+                            hidden_dims=[256, 128], dropout=0.1, 
+                            activation='relu')
+        # self.config = config
+        # image_knn_sim,self.image_knn_idx = self.get_knn_ind(self.image_embedding.weight.detach())
+        # text_knn_sim,self.text_knn_idx = self.get_knn_ind(self.text_embedding.weight.detach())
+        # ii_graph = self.build_ppr_graph(train_edge_index, num_users , num_items, alpha=0.15, iters=20, topk=5,sparse=True)
+        # self.image_knn_sim = self.get_knn_sim(self.image_embedding.weight.detach()).cuda()
+        # self.text_knn_sim = self.get_knn_sim(self.text_embedding.weight.detach()).cuda()
+        # img_adj = self.build_knn_adj(self.image_knn_idx)
+        # txt_adj = self.build_knn_adj(self.text_knn_idx)
+        # img_adj_w = self.scale_sparse(img_adj, 0.1)
+        # txt_adj_w = self.scale_sparse(txt_adj, 0.9)
         
-        self.mm_adj = (img_adj_w + txt_adj_w).coalesce()
-        self.mm_adj = self.max_agreement(self.mm_adj,ii_graph).to(self.device)
-        self.mm_dense = self.mm_adj.to_dense()
+        # self.mm_adj = (img_adj_w + txt_adj_w).coalesce()
+        # self.mm_adj = self.max_agreement(self.mm_adj,ii_graph).to(self.device)
+        # self.mm_dense = self.mm_adj.to_dense()
         self.dropout = nn.Dropout(p=config['dropout'])
         self.init_weight()
         print('Go FREEDOM')
@@ -202,10 +275,10 @@ class FREEDOM(RecModel):
     def init_weight(self):
         if config['init'] == 'normal':
             nn.init.normal_(self.user_emb.weight,std=config['init_weight'])
-            nn.init.normal_(self.item_emb.weight,std=config['init_weight'])
+            # nn.init.normal_(self.item_emb.weight,std=config['init_weight'])
         else:
             nn.init.xavier_uniform_(self.user_emb.weight,gain=config['init_weight'])
-            nn.init.xavier_uniform_(self.item_emb.weight,gain=config['init_weight'])
+            # nn.init.xavier_uniform_(self.item_emb.weight,gain=config['init_weight'])
     # def tv_l21(self, Z: torch.Tensor, B: torch.Tensor, eps: float = 1e-12):
     #     diff = matmul(B,Z)         
     #     edge_l2 = (diff**2).sum(dim=1).add_(eps).sqrt_()
@@ -258,31 +331,40 @@ class FREEDOM(RecModel):
         return gcn_norm(agree_adj,add_self_loops=False)
     
     def forward(self):
-
-        # print(h_mm.shape)
-        h = self.item_emb.weight
-        h = self.propagate(edge_index=self.mm_adj, x=h)
-        x_u=self.user_emb.weight
-        x_i=self.item_emb.weight
-        x = torch.cat([x_u,x_i])
-        if self.config['zero_layer'] == 'True':
-            out = [x]
-        else:
-            out = []
-        for i in range(self.K):
-            x = self.propagate(edge_index=self.edge_index,x=x)
-            out += [x]
-        out = torch.stack(out,dim=1)
-        out = out.mean(dim=1)
-        u_out , i_out = torch.split(out,[self.num_users,self.num_items])
-        # scale = i_out.norm(dim=1).mean() / h.norm(dim=1).mean()
-        # h = h * scale
-        return u_out, i_out + h
+        user_emb = self.user_emb.weight
+        item_image_emb = self.image_mlp(self.image_embedding.weight)
+        item_text_emb = self.text_mlp(self.text_embedding.weight)
+        i_v_pos = self.i_pe(item_image_emb)
+        i_t_pos = self.i_pe(item_text_emb)
+        # u_pos = user_emb
+        # print(u_pos.shape)
+        u_pos = self.u_pe(user_emb)
+        # print(u_pos.shape)
+        # print(u_pos.shape,i_v_pos.shape,i_t_pos.shape)
+        alpha = self.config['alpha']
+        item_emb = alpha * item_text_emb + (1 - alpha) * item_image_emb
+        item_pos_emb = alpha * i_t_pos + (1 - alpha) * i_v_pos
+        return u_pos,item_emb,item_pos_emb
     
+    def forward_i(self):
+        item_image_emb = self.image_mlp(self.image_embedding.weight)
+        item_text_emb = self.text_mlp(self.text_embedding.weight)
+        alpha = self.config['alpha']
+        item_emb = alpha * item_text_emb + (1 - alpha) * item_image_emb
+        return matmul(self.G, item_emb)
 
-    
-    def bpr_loss(self,edge_label_index:Tensor):
-        user_emb,item_emb = self.forward()
+    # def align_loss(self,edge_label_index):
+    #     user_emb = self.user_emb.weight
+    #     dst_emb = self.forward_i()
+    #     src_emb = user_emb[edge_label_index[0]]
+    #     dst_emb = dst_emb[edge_label_index[1]]
+    #     return self.alignment(src_emb,dst_emb)
+
+    def alignment(self,x, y):
+        x, y = F.normalize(x, dim=-1), F.normalize(y, dim=-1)
+        return (x - y).norm(dim=1).pow(2).mean()
+
+    def bpr_loss(self,user_emb,item_emb, edge_label_index:Tensor):
         out_src = user_emb[edge_label_index[0]]
         out_dst = item_emb[edge_label_index[1]]
         out_dst_neg = item_emb[edge_label_index[2]]
@@ -305,35 +387,13 @@ class FREEDOM(RecModel):
         return regularization
     
     def get_loss(self,edge_label_index:Tensor):
-        text_feats = self.text_trs(self.text_embedding.weight)
-        image_feats = self.image_trs(self.image_embedding.weight)     
-        user_emb,item_emb = self.forward()
-        # user_emb = user_emb[:,:self.config['dim']]
-        # item_idx = torch.unique(edge_label_index[1])
-        batch_mf_loss = self.bpr_loss(edge_label_index=edge_label_index)
-        # batch_mf_loss = self.ssm_loss(edge_label_index=edge_label_index)
-        # batch_mf_loss = self.smooth_ap(edge_label_index=edge_label_index,user_emb=user_emb,item_emb=item_emb)
-        # t_loss = self.InfoNCE_U_ALL(user_emb,text_feats,edge_label_index[0],edge_label_index[1],config['tau1'])
-        # v_loss = self.InfoNCE_U_ALL(user_emb,image_feats,edge_label_index[0],edge_label_index[1],config['tau1'])
-        t_loss = self.ssm_loss(user_emb,text_feats,edge_label_index)
-        v_loss = self.ssm_loss(user_emb,image_feats,edge_label_index)
-        # v_t_align = self.ssm_loss(image_feats,text_feats,edge_label_index) + self.ssm_loss(text_feats,image_feats,edge_label_index)
-        # t_i_reg = self.item_alignment(items=torch.unique(edge_label_index[1]),knn_ind=self.text_knn_idx,knn_sim=self.text_knn_sim)
-        # v_i_reg = self.item_alignment(items=torch.unique(edge_label_index[1]),knn_ind=self.image_knn_idx,knn_sim=self.image_knn_sim)
-        # reg = 1e-6 * (0.9 * t_i_reg + 0.1 * v_i_reg)
-        # tv_item = self.tv_l21(item_emb, self.B_item)
-        # t_loss = self.smooth_ap(edge_label_index=edge_label_index,user_emb=user_emb,item_emb=text_feats)
-        # v_loss = self.smooth_ap(edge_label_index=edge_label_index,user_emb=user_emb,item_emb=image_feats)
-        # t_loss = self.bpr_loss(edge_label_index=edge_label_index,
-        # mf_t_loss = self.bpr_loss(edge_label_index=edge_label_index,
-        #                               user_emb=ua_embeddings,
-        #                               item_emb=text_feats)
-        # mf_v_loss = self.bpr_loss(edge_label_index=edge_label_index,
-        #                               user_emb=ua_embeddings,
-        #                               item_emb=image_feats)
-        # l2_reg = self.norm_loss()
-        # l2_reg = self.l2_reg(edge_label_index=edge_label_index)
-        return batch_mf_loss + self.config['gamma'] * (t_loss + self.config['_lambda']*v_loss)
+        user_emb,item_emb,item_pos = self.forward()
+        # user_raw_emb = self.user_emb.weight
+        # rec_loss = self.bpr_loss(user_emb,item_pos,edge_label_index)
+        cl_loss = self.ssm_loss(user_emb,item_pos,edge_label_index)
+        # align_loss = self.align_loss(edge_label_index)
+        return cl_loss
+    
     def item_alignment(self,items,knn_ind,knn_sim):
         knn_neighbour = knn_ind[items] # [num_items_batch * knn_k]
         user_emb = self.item_emb.weight[items].unsqueeze(1)
@@ -342,11 +402,11 @@ class FREEDOM(RecModel):
         loss = -sim_score * (user_emb * item_emb).sum(dim=-1).sigmoid().log()
         return loss.sum()
     
-    def InfoNCE_U_ALL(self,view1,view2,u_idx,pos,t):
+    def InfoNCE_U_ALL(self,view1,view2,pos_idx,t):
         view1 = F.normalize(view1,dim=1)
         view2 = F.normalize(view2,dim=1)
-        view1_pos = view1[u_idx]
-        view2_pos = view2[pos]
+        view1_pos = view1[pos_idx]
+        view2_pos = view2[pos_idx]
         info_pos = (view1_pos * view2_pos).sum(dim=1)/ t
         info_pos_score = torch.exp(info_pos)
         info_neg = (view1_pos @ view2.t())/ t
@@ -358,7 +418,7 @@ class FREEDOM(RecModel):
     def link_prediction(self,
                         src_index:Tensor=None,
                         dst_index:Tensor=None):
-        out_u, out_i = self.forward()
+        out_u, out_i,_ = self.forward()
 
         if src_index is None:
             src_index = torch.arange(self.num_users).long()
@@ -375,7 +435,7 @@ class FREEDOM(RecModel):
         emb_neg = emb2[neg_edge_index]
         emb1 = emb1[edge_label_index[0]]
         emb2 = emb2[edge_label_index[1]]
-        emb1 = self.dropout(emb1)
+        # emb1 = self.dropout(emb1)
         emb1 = F.normalize(emb1, dim=-1)
         item_emb = torch.cat([emb2.unsqueeze(1), emb_neg], dim=1)
         item_emb = F.normalize(item_emb, dim=-1)
@@ -385,6 +445,8 @@ class FREEDOM(RecModel):
         Ng = neg_logits.sum(dim=-1)
         loss = (- torch.log(pos_logits / Ng))
         return loss.mean() 
+
+
     
 def train(datset,model:FREEDOM,opt):
     model = model

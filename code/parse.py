@@ -21,7 +21,7 @@ def parse_args():
     
     parser.add_argument('--dataset', type=str, default='baby')
 
-    parser.add_argument('--recdim', type=int, default=64)
+    parser.add_argument('--dim', type=int, default=64)
 
     parser.add_argument('--num_neg', type=int, default=64)
 
@@ -39,6 +39,16 @@ def parse_args():
 
     parser.add_argument('--lambda_1', type=float, default=0.05)
 
-    parser.add_argument('--init_weight', type=int, default=1)
-    
+    parser.add_argument('--init_weight', type=float, default=1.0)
+
+    parser.add_argument('--init', type=str, default='uniform')
+
+    parser.add_argument('--ii_k', type=int, default=10)
+
+    parser.add_argument('--neg_sampling', type=str, default='uniform')
+
+    parser.add_argument('--zero_layer', type=str, default='False')
+
+    parser.add_argument('--s_weight', type=float, default=1.0)
+
     return parser.parse_args()
