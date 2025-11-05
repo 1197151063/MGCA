@@ -23,7 +23,7 @@ def parse_args():
 
     parser.add_argument('--dim', type=int, default=64)
 
-    parser.add_argument('--num_neg', type=int, default=64)
+    parser.add_argument('--num_neg', type=int, default=32)
 
     parser.add_argument('--tau1', type=float, default=0.1)
 

@@ -124,7 +124,7 @@ def early_stopping(recall,
                    best,
                    patience,
                    model):
-    if patience < 50: 
+    if patience < 30: 
         if recall + ndcg > best: 
             patience = 0
             # print('[BEST]')
